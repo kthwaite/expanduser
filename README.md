@@ -7,6 +7,11 @@ A Rust library for expanding tilde expressions to user home directories.
 - Works with both `&str` and `Path` types
 - Provides detailed error handling
 
+Expansion replaces only a leading `~` or `~username` component. Other paths
+are returned unchanged, and the suffix is preserved verbatim, including
+trailing `/` and `/.` directory requirements. Expansion does not canonicalize
+paths or require them to exist.
+
 ## Usage
 
 ```rust
