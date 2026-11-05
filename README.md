@@ -7,6 +7,9 @@ A Rust library for expanding tilde expressions to user home directories.
 - Works with both `&str` and `Path` types
 - Provides detailed error handling
 
+Uses `dirs-sys` 0.5 for current-user home directory lookup and `thiserror` 2
+for error implementations; the public expansion and error APIs are unchanged.
+
 ## Usage
 
 ```rust
