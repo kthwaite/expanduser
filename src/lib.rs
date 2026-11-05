@@ -2,7 +2,7 @@
 use std::{
     ffi::{CStr, CString, OsStr, OsString},
     os::unix::ffi::OsStrExt,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 use thiserror::Error;
 
@@ -68,26 +68,30 @@ where
 {
     /// Expands a tilde expression to a user's home directory.
     fn expand_user(&self) -> Result<PathBuf, ExpandUserError> {
-        let mut components = self.as_ref().components();
-        let mut path = PathBuf::new();
-        match components.next() {
-            Some(Component::Normal(part)) => match part.to_str() {
-                Some("~") => match dirs_sys::home_dir() {
-                    Some(dir) => path.push(dir),
-                    None => return Err(ExpandUserError::CurrentUserHomeNotFound),
-                },
-                Some(prefix) if prefix.starts_with("~") => {
-                    let assumed_user = &prefix[1..];
-                    let home_dir = unsafe { get_user_home(assumed_user)? };
-                    path.push(home_dir);
-                }
-                _ => path.push(part),
-            },
-            Some(other) => path.push(other),
-            None => return Ok(path),
+        let original = self.as_ref();
+        let bytes = original.as_os_str().as_bytes();
+        if bytes.first() != Some(&b'~') {
+            return Ok(original.to_path_buf());
         }
-        path.push(components);
-        Ok(path)
+        let end = bytes
+            .iter()
+            .position(|&byte| byte == b'/')
+            .unwrap_or(bytes.len());
+        let user = match std::str::from_utf8(&bytes[1..end]) {
+            Ok(user) => user,
+            Err(_) => return Ok(original.to_path_buf()),
+        };
+        let mut home = if user.is_empty() {
+            dirs_sys::home_dir()
+                .ok_or(ExpandUserError::CurrentUserHomeNotFound)?
+                .into_os_string()
+        } else {
+            unsafe { get_user_home(user)? }
+        };
+        // Append bytes, not a Path: a leading slash in the suffix must not
+        // replace the home, and trailing slashes/dots carry directory semantics.
+        home.push(OsStr::from_bytes(&bytes[end..]));
+        Ok(PathBuf::from(home))
     }
 }
 

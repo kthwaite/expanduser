@@ -14,6 +14,11 @@ Named users, including `root`, are resolved through the system account database.
 For example, `~root` uses `/var/root` on a standard macOS installation rather
 than assuming the Linux convention of `/root`.
 
+Expansion replaces only a leading `~` or `~username` component. Other paths
+are returned unchanged, and the suffix is preserved verbatim, including
+trailing `/` and `/.` directory requirements. Expansion does not canonicalize
+paths or require them to exist.
+
 ## Usage
 
 ```rust
