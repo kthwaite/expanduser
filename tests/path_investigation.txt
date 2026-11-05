@@ -1,0 +1,97 @@
+Path/HOME investigation; local/private discovery evidence
+======================================================
+Production tested: discovery baseline a82ad20 (src/lib.rs unchanged from 9c37a10).
+Harness: tests/path_properties.rs. Runtime: macOS arm64, Rust Unix paths.
+
+Commands and observed results
+-----------------------------
+env PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261105 cargo test --test path_properties -- --nocapture
+PASS for independent component-quotient/representation/HOME-history assertions.
+This default mode REPORTS semantic discrepancies; it does not assert they are acceptable.
+12560 exhaustive Cartesian queries; 8192 random histories; 639163 total queries.
+Coverage: 506385 current-HOME expansions, 132778 non-expanding paths,
+66890 HOME sets, 22202 empty HOME transitions, 22446 unset HOME transitions,
+334461 non-UTF8 queries, 30384 valid non-ASCII queries, 46394 embedded-NUL
+queries, 293088 dot, 285170 parent, 115338 repeated-separator and 343962
+trailing-separator queries. 578487 byte discrepancies are NOT automatically bugs.
+
+Filesystem matrix: 256 cases, 82 semantic discrepancies; plus 7 relative-path
+witnesses and HOME-as-regular-file witness. All observations use metadata inode,
+device, directory status or raw OS error, never Path equality.
+
+PATH_PROP_CHECK=semantic PROPTEST_RNG_SEED=20261105 cargo test --test path_properties -- --nocapture
+FAIL, shrunk (stem=0, tail=1, tilde=false): absolute <fixture>/file/ becomes
+<fixture>/file. Expected ENOTDIR (20); observed regular-file metadata success.
+Seed retained in path_semantic.proptest-regressions. Semantic matrix subsequently
+extended from 192 to 256 cases; semantic generator and saved witness unchanged.
+Strict semantic mode also asserts all matrix, relative and HOME=file observations
+once its shrinkable property passes, for complete candidate-fix validation.
+
+PATH_PROP_CHECK=raw PROPTEST_RNG_SEED=20261106 cargo test --test path_properties -- --nocapture
+FAIL, shrunk raw input // to actual /. Lexical preservation is intentionally
+stronger than the documented contract; this alone is NOT a confirmed semantic
+bug on this machine. Seeds retained in path_raw.proptest-regressions.
+
+Deterministic confirmed witnesses
+--------------------------------
+Create a regular file named file, cwd its directory:
+  expand("file") == bytes "file/"; metadata changes success -> ENOTDIR.
+  expand("file-link") for symlink to file also adds / and changes success -> ENOTDIR.
+  expand("./file/") == bytes "./file"; metadata changes ENOTDIR -> success.
+With HOME=<fixture>, expand("~/file/") and expand("~/file/.") both become
+<fixture>/file, changing ENOTDIR -> success. Absolute non-tilde paths share this
+behavior. Nested file and directory-symlink/parent variants reproduce it.
+With HOME=<fixture>/file, expand("~") adds / and changes success -> ENOTDIR.
+Bare relative file/. becomes file/ and retains ENOTDIR: context matters.
+
+Root cause and minimal repair recommendation
+------------------------------------------
+Path::components trims suffix separators/dots, while unconditional push of an
+empty remainder adds a slash to a single component. PathBuf equality conceals
+these changes. Parse original first byte component, preserve non-expanding paths,
+and append original suffix bytes directly to resolved home, not PathBuf::push of
+an absolute /suffix. Parent owns focused fix and production regression tests.
+
+Sensitivity and follow-up coverage
+----------------------------------
+Known filesystem witnesses demonstrate semantic-oracle sensitivity in both
+slash insertion and removal directions. An explicit all-components-tilde mutant
+is rejected by the independent byte grammar; a spurious slash is distinguished
+by byte comparison while demonstrating Path equality's blind spot. No production
+mutation is left behind. After initial pass, added unrestricted byte tails up to
+2047 bytes, relative filesystem witnesses, and interior-dot/parent variants.
+
+HOME mutation is isolated in a dedicated child test binary. Empty/unset HOME
+fallback is checked using an independent getpwuid_r provider query with ERANGE
+retry; fallback was available on the host. Every mutation is immediately observed
+with both bare ~ and a dot/parent/non-UTF8 suffix, so random histories cannot omit
+warm -> mutate -> query. APIs: OsStr, OsString, Path, PathBuf, str and String.
+
+Blind spots / non-claims
+-----------------------
+Named-user/account lookup semantics are owned by another worker. No missing-UID
+fallback environment was available; no HOME-absence error branch claim. Windows,
+other Unix filesystems, network double-slash semantics, permission-sensitive
+traversal, concurrent external environment writers, and arbitrary mount behavior
+were not tested. The component quotient intentionally removes dot/separator
+lexical noise and is NOT a filesystem oracle. Symlinks/dots/parents are checked
+separately on real fixtures. HOME cannot contain NUL by OS environment contract.
+
+Candidate validation
+--------------------
+Parent fix/preserve-path-semantics parser as read from
+/tmp/expanduser-fix-paths/src/lib.rs (tool snapshot 3260, before its commit) was
+temporarily applied verbatim to this isolated worktree. Root-account special
+case intentionally unchanged. All production edits were then restored.
+
+env PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261107 cargo test --test path_properties -- --nocapture
+PASS: 8192 fresh histories and 12560 exhaustive queries; 637310 total queries,
+66553 HOME sets, 22208 empty HOME transitions, 22242 unset HOME transitions.
+ZERO byte discrepancies and ZERO filesystem discrepancies across 256 cases.
+
+env PATH_PROP_CHECK=semantic PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261107 cargo test --test path_properties -- --nocapture
+PASS: saved minimized failure, 8192 fresh semantic cases, full 256-case matrix,
+7 relative witnesses and HOME=file witness.
+
+env PATH_PROP_CHECK=raw PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261107 cargo test --test path_properties -- --nocapture
+PASS: saved lexical failures and 8192 fresh raw-byte grammar cases.
