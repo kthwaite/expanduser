@@ -7,6 +7,10 @@ A Rust library for expanding tilde expressions to user home directories.
 - Works with both `&str` and `Path` types
 - Provides detailed error handling
 
+Named users, including `root`, are resolved through the system account database.
+For example, `~root` uses `/var/root` on a standard macOS installation rather
+than assuming the Linux convention of `/root`.
+
 ## Usage
 
 ```rust
