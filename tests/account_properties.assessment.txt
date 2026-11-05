@@ -1,0 +1,111 @@
+NAMED-ACCOUNT DISCOVERY (local/private; no public disclosure)
+
+Plan and oracle
+---------------
+Target the named-user branch separately from HOME/current-user path parsing.
+Use getpwnam_r/getpwuid_r with caller-owned storage rather than production
+getpwnam; inventory local accounts through dscl on Darwin (getent elsewhere).
+Cross account classes with six public AsRef<Path> representations and suffixes.
+Use a deterministic root regression to calibrate the oracle, then generated
+account choices, unknown names, and histories interspersed with foreign libc
+lookups. Keep opt-in cross-thread stress separate from ordinary tests.
+
+Tested revisions/platform
+-------------------------
+Baseline: a82ad20e2746e816f53067707e47683d7ebcd0c7 (production code from
+9c37a10, with preexisting dependency/README migration preserved).
+Root-fix candidate: a9576828f5b04e66396fb7902a3b0619f18d3f15.
+Host: Darwin 27.0.0 arm64; 133 independently enumerated accounts.
+Current account: kit, uid 501, /Users/kit. Root: uid 0, /var/root.
+Discovery worktree: /tmp/expanduser-accounts, investigate/account-properties.
+
+Confirmed witness and calibration
+---------------------------------
+root_home_matches_account_database fails on baseline:
+  input: ~root
+  actual: Ok("/root/")
+  expected from getpwnam_r: Ok("/var/root")
+PathBuf equality is component-aware: this failure is the incorrect root home,
+NOT a trailing-slash byte-preservation assertion. A /file suffix isolates the
+same root-home mistake without the separate empty-component push behavior.
+The deterministic test checks empty, .bashrc and Unicode/parent suffixes in all
+six representations on the candidate; baseline stops at its first assertion.
+
+Initial persisted seed:
+  c4d79db521e0b587afecdde008d2f5de51d576d504b26d594466a02e0e293a23
+The generator was strengthened after its first run to make the root selector
+explicit; that same persisted seed now minimizes to:
+  force_root=true, index=0, suffix=[], representation=0
+No deliberate production mutation was needed: this demonstrated root defect
+calibrated sensitivity, and the independent focused root fix removes the failure.
+
+Commands/results
+----------------
+1. cargo test --test account_properties -- --nocapture
+   Final baseline harness: 5 passed, 2 failed, 1 ignored.
+   Failures: root_home_matches_account_database and
+   named_accounts_match_reentrant_oracle, both the root home defect.
+2. cargo test --test account_properties concurrent_expansions_with_foreign_libc_calls -- --exact --ignored --nocapture
+   Passed: 80,000 nonroot expansions, 40,000 foreign getpwnam/getpwuid calls,
+   six threads. No race or mismatch observed on Darwin.
+   EXPANDUSER_STRESS_ITERS changes per-thread iterations (default 20,000).
+3. cargo test --manifest-path /tmp/expanduser-account-candidate-check/Cargo.toml --test account_properties -- --nocapture
+   Candidate: 7 passed, 1 ignored, fresh cases plus persisted seed.
+   The temporary consumer depended on expanduser path=/tmp/expanduser-fix-root,
+   libc=0.2, proptest=1 and used this retained account_properties.rs as its
+   [[test]] path. Its manifest/target were removed after testing.
+
+Coverage and neighboring entry points
+-------------------------------------
+- 132 nonroot accounts x 6 API representations x 3 suffix shapes: 2,376
+  deterministic successful expansions. Includes current account/system users.
+- &str, String, &Path, PathBuf, &OsStr, OsString all exercise blanket impl.
+- 256 generated cases each for mixed known accounts, generated unknown/present
+  names, and nonroot histories of 1..29 expansions with foreign name/uid calls.
+  Baseline mixed-known property stops on root; candidate completes it.
+- Unicode names (independently confirmed absent) and Unicode suffixes; ASCII
+  unknowns, embedded NUL usernames after root/current-name prefixes, invalid
+  UTF8 and embedded NUL suffix bytes, parent components and nested ~root.
+- Invalid UTF8 first-component behavior is recorded as current passthrough,
+  not asserted as a promised contract. General byte-preservation semantics
+  and HOME/environment behavior belong to the separate path investigation.
+
+Platform contract and prospective minimal repair
+------------------------------------------------
+Darwin SDK getpwent/getpwnam manual, lines 141-149:
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/share/man/man3/getpwent.3
+The lookup functions are thread-safe with thread-specific storage, invalidated
+by subsequent calls on that thread. The manual explicitly calls them unsuitable
+for libraries/frameworks because they invalidate the application's prior data.
+Apple primary-source online manual:
+  https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/getpwnam.3.html
+Linux man-pages primary contract:
+  https://man7.org/linux/man-pages/man3/getpwnam.3.html
+getpwnam is MT-Unsafe race:pwnam locale; returned storage may be overwritten by
+later getpwnam/getpwuid/getpwent calls. Reentrant variants are MT-Safe locale and
+write records/strings into caller-owned storage. _SC_GETPW_R_SIZE_MAX is an
+initial suggestion, not a bound; ERANGE requires a larger buffer.
+
+Consequently Linux shared-storage use is an inspection/contract-based safety
+risk, NOT an observed Linux race or demonstrated exploit in this investigation.
+Darwin's passing stress does not validate Linux. No foreign pointer was read
+after a later non-reentrant call; no stale-pointer UB witness was manufactured.
+No Linux runtime was available (parent found Docker client but no daemon).
+
+Prospective minimal repair: replace getpwnam with getpwnam_r, retain caller-owned
+passwd and a growable buffer through the pw_dir copy, handle ERANGE using checked
+growth, inspect return status and result before dereferencing, and preserve
+existing invalid-NUL/not-found/missing-home errors. Choosing how to expose
+non-lookup OS errors needs care because today's public error enum has no
+system-lookup-error variant. A crate-only mutex is insufficient: unrelated
+foreign callers do not take that mutex. No production fix was made here.
+
+Blindspots
+----------
+No existing Unicode-named account was provisioned. No live account database
+mutation, remote directory backend failure, giant record, ERANGE injection,
+null pw_dir fixture, locale mutation, allocator failure, or race detector run.
+Inventory can omit remote accounts; fallback names cover only a small set if
+dscl/getent is unavailable. Oracle expects successful OS queries and does not
+silently reinterpret OS errors as absent accounts. Stress is nondeterministic
+and cannot establish absence of races or other memory-safety violations.
