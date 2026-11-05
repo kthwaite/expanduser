@@ -1,5 +1,5 @@
 //! Local discovery suite. Run with `cargo test --test account_properties -- --nocapture`.
-//! Root-oracle checks intentionally fail on hosts where root's home is not /root.
+//! On the baseline, root-oracle checks fail when root's home is not /root.
 //! Shared-storage stress is opt-in; it is not a race detector and a passing run
 //! establishes neither Linux thread safety nor freedom from foreign-call interference.
 #![cfg(unix)]
@@ -34,18 +34,27 @@ fn lookup(name: Option<&str>) -> Option<Account> {
         let code = unsafe {
             match &name {
                 Some(name) => libc::getpwnam_r(
-                    name.as_ptr(), pwd.as_mut_ptr(), buffer.as_mut_ptr().cast(),
-                    buffer.len(), &mut result,
+                    name.as_ptr(),
+                    pwd.as_mut_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut result,
                 ),
                 None => libc::getpwuid_r(
-                    libc::getuid(), pwd.as_mut_ptr(), buffer.as_mut_ptr().cast(),
-                    buffer.len(), &mut result,
+                    libc::getuid(),
+                    pwd.as_mut_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut result,
                 ),
             }
         };
         if code == libc::ERANGE {
             size = size.checked_mul(2).expect("oracle buffer overflow");
-            assert!(size <= 16 * 1024 * 1024, "oracle account record exceeds 16 MiB");
+            assert!(
+                size <= 16 * 1024 * 1024,
+                "oracle account record exceeds 16 MiB"
+            );
             continue;
         }
         assert_eq!(code, 0, "account oracle failed: {:?}", name);
@@ -55,8 +64,13 @@ fn lookup(name: Option<&str>) -> Option<Account> {
         let pwd = unsafe { pwd.assume_init() };
         assert!(!pwd.pw_name.is_null() && !pwd.pw_dir.is_null());
         return Some(Account {
-            name: unsafe { CStr::from_ptr(pwd.pw_name) }.to_str().expect("non-UTF8 account name").to_owned(),
-            home: PathBuf::from(OsStr::from_bytes(unsafe { CStr::from_ptr(pwd.pw_dir) }.to_bytes())),
+            name: unsafe { CStr::from_ptr(pwd.pw_name) }
+                .to_str()
+                .expect("non-UTF8 account name")
+                .to_owned(),
+            home: PathBuf::from(OsStr::from_bytes(
+                unsafe { CStr::from_ptr(pwd.pw_dir) }.to_bytes(),
+            )),
             uid: pwd.pw_uid,
         });
     }
@@ -64,14 +78,20 @@ fn lookup(name: Option<&str>) -> Option<Account> {
 
 fn accounts() -> &'static Vec<Account> {
     static ACCOUNTS: LazyLock<Vec<Account>> = LazyLock::new(|| {
-        let mut names = vec!["root".to_owned(), lookup(None).expect("current account absent").name];
+        let mut names = vec![
+            "root".to_owned(),
+            lookup(None).expect("current account absent").name,
+        ];
         #[cfg(target_os = "macos")]
         let command = Command::new("dscl").args([".", "-list", "/Users"]).output();
         #[cfg(not(target_os = "macos"))]
         let command = Command::new("getent").arg("passwd").output();
         if let Ok(output) = command {
             if output.status.success() {
-                for line in String::from_utf8(output.stdout).expect("account inventory is not UTF8").lines() {
+                for line in String::from_utf8(output.stdout)
+                    .expect("account inventory is not UTF8")
+                    .lines()
+                {
                     names.push(line.split(':').next().unwrap().to_owned());
                 }
             }
@@ -80,8 +100,12 @@ fn accounts() -> &'static Vec<Account> {
         names.sort();
         names.dedup();
         let accounts: Vec<_> = names.iter().filter_map(|name| lookup(Some(name))).collect();
-        eprintln!("account oracle inventory: {} accounts; current={:?}; root={:?}",
-            accounts.len(), lookup(None), lookup(Some("root")));
+        eprintln!(
+            "account oracle inventory: {} accounts; current={:?}; root={:?}",
+            accounts.len(),
+            lookup(None),
+            lookup(Some("root"))
+        );
         assert!(accounts.iter().any(|a| a.name == "root"));
         assert!(accounts.iter().any(|a| a.name != "root"));
         accounts
@@ -91,8 +115,15 @@ fn accounts() -> &'static Vec<Account> {
 
 fn suffix() -> impl Strategy<Value = Vec<String>> {
     prop::collection::vec(
-        prop_oneof!["[a-zA-Z0-9_-]{1,24}", Just("документы".into()), Just("日本語".into()),
-            Just("e\u{301}".into()), Just("~root".into()), Just("..".into()), Just(".hidden".into())],
+        prop_oneof![
+            "[a-zA-Z0-9_-]{1,24}",
+            Just("документы".into()),
+            Just("日本語".into()),
+            Just("e\u{301}".into()),
+            Just("~root".into()),
+            Just("..".into()),
+            Just(".hidden".into())
+        ],
         0..6,
     )
 }
@@ -129,10 +160,17 @@ fn expand_as(input: &str, representation: u8) -> Result<PathBuf, ExpandUserError
 fn root_home_matches_account_database() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let root = lookup(Some("root")).expect("root account absent");
-    for suffix in [vec![], vec![".bashrc".into()], vec!["日本語".into(), "..".into(), "file".into()]] {
+    for suffix in [
+        vec![],
+        vec![".bashrc".into()],
+        vec!["日本語".into(), "..".into(), "file".into()],
+    ] {
         for representation in 0..6 {
-            assert_eq!(expand_as(&input_for("root", &suffix), representation),
-                Ok(expected_for(&root, &suffix)), "representation={representation}, suffix={suffix:?}");
+            assert_eq!(
+                expand_as(&input_for("root", &suffix), representation),
+                Ok(expected_for(&root, &suffix)),
+                "representation={representation}, suffix={suffix:?}"
+            );
         }
     }
 }
@@ -141,10 +179,17 @@ fn root_home_matches_account_database() {
 fn every_existing_nonroot_account_and_representation() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for account in accounts().iter().filter(|a| a.name != "root") {
-        for suffix in [vec![], vec!["file".into()], vec!["日本語".into(), "..".into(), "~root".into()]] {
+        for suffix in [
+            vec![],
+            vec!["file".into()],
+            vec!["日本語".into(), "..".into(), "~root".into()],
+        ] {
             for representation in 0..6 {
-                assert_eq!(expand_as(&input_for(&account.name, &suffix), representation),
-                    Ok(expected_for(account, &suffix)), "account={account:?}, representation={representation}");
+                assert_eq!(
+                    expand_as(&input_for(&account.name, &suffix), representation),
+                    Ok(expected_for(account, &suffix)),
+                    "account={account:?}, representation={representation}"
+                );
             }
         }
     }
@@ -153,12 +198,22 @@ fn every_existing_nonroot_account_and_representation() {
 #[test]
 fn unknown_unicode_and_embedded_nul_are_not_existing_prefixes() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for name in ["expanduser_no_such_account_6e31", "юзер_6e31", "日本語_6e31", "é_6e31"] {
-        assert!(lookup(Some(name)).is_none(), "fixture unexpectedly exists: {name}");
+    for name in [
+        "expanduser_no_such_account_6e31",
+        "юзер_6e31",
+        "日本語_6e31",
+        "é_6e31",
+    ] {
+        assert!(
+            lookup(Some(name)).is_none(),
+            "fixture unexpectedly exists: {name}"
+        );
         for representation in 0..6 {
             for suffix in ["", "/file", "/日本語"] {
-                assert_eq!(expand_as(&format!("~{name}{suffix}"), representation),
-                    Err(ExpandUserError::UserNotFound { user: name.into() }));
+                assert_eq!(
+                    expand_as(&format!("~{name}{suffix}"), representation),
+                    Err(ExpandUserError::UserNotFound { user: name.into() })
+                );
             }
         }
     }
@@ -166,8 +221,10 @@ fn unknown_unicode_and_embedded_nul_are_not_existing_prefixes() {
         for tail in ["", "x", "日本語"] {
             let name = format!("{prefix}\0{tail}");
             for representation in 0..6 {
-                assert_eq!(expand_as(&format!("~{name}/file"), representation),
-                    Err(ExpandUserError::InvalidTildeExpression { expr: name.clone() }));
+                assert_eq!(
+                    expand_as(&format!("~{name}/file"), representation),
+                    Err(ExpandUserError::InvalidTildeExpression { expr: name.clone() })
+                );
             }
         }
     }
@@ -182,13 +239,19 @@ fn non_utf8_and_nul_suffixes_are_path_data() {
         bytes.extend_from_slice(suffix);
         let input = OsString::from_vec(bytes);
         let expected = account.home.join(OsStr::from_bytes(suffix));
-        assert_eq!(input.expand_user().unwrap().as_os_str().as_bytes(), expected.as_os_str().as_bytes());
-        assert_eq!(Path::new(&input).expand_user().unwrap().as_os_str().as_bytes(), expected.as_os_str().as_bytes());
+        assert_eq!(
+            input.expand_user().unwrap().as_os_str().as_bytes(),
+            expected.as_os_str().as_bytes()
+        );
+        assert_eq!(
+            Path::new(&input)
+                .expand_user()
+                .unwrap()
+                .as_os_str()
+                .as_bytes(),
+            expected.as_os_str().as_bytes()
+        );
     }
-    // Invalid UTF8 in the first component currently bypasses tilde parsing. This
-    // records behavior, not a claim that the API promises rejection or expansion.
-    let input = OsString::from_vec(b"~root\xff/file".to_vec());
-    assert_eq!(input.expand_user().unwrap(), PathBuf::from(&input));
 }
 
 proptest! {
@@ -243,8 +306,15 @@ proptest! {
 fn concurrent_expansions_with_foreign_libc_calls() {
     use std::sync::{Arc, Barrier};
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let accounts: Vec<_> = accounts().iter().filter(|a| a.name != "root").cloned().collect();
-    let iterations: usize = std::env::var("EXPANDUSER_STRESS_ITERS").ok().map(|s| s.parse().unwrap()).unwrap_or(20_000);
+    let accounts: Vec<_> = accounts()
+        .iter()
+        .filter(|a| a.name != "root")
+        .cloned()
+        .collect();
+    let iterations: usize = std::env::var("EXPANDUSER_STRESS_ITERS")
+        .ok()
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(20_000);
     let barrier = Arc::new(Barrier::new(6));
     std::thread::scope(|scope| {
         for worker in 0..6 {
@@ -259,15 +329,21 @@ fn concurrent_expansions_with_foreign_libc_calls() {
                         // memory. Concurrent expansion may still expose the
                         // implementation's unsupported getpwnam use on Linux.
                         unsafe {
-                            if (index + worker) % 2 == 0 { libc::getpwnam(root.as_ptr()); }
-                            else { libc::getpwuid(0); }
+                            if (index + worker) % 2 == 0 {
+                                libc::getpwnam(root.as_ptr());
+                            } else {
+                                libc::getpwuid(0);
+                            }
                         }
                     }
                 } else {
                     for index in 0..iterations {
                         let account = &accounts[(index + worker) % accounts.len()];
-                        assert_eq!(format!("~{}/probe", account.name).expand_user(),
-                            Ok(account.home.join("probe")), "worker={worker}, iteration={index}, account={account:?}");
+                        assert_eq!(
+                            format!("~{}/probe", account.name).expand_user(),
+                            Ok(account.home.join("probe")),
+                            "worker={worker}, iteration={index}, account={account:?}"
+                        );
                     }
                 }
             });

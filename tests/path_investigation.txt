@@ -55,11 +55,13 @@ an absolute /suffix. Parent owns focused fix and production regression tests.
 Sensitivity and follow-up coverage
 ----------------------------------
 Known filesystem witnesses demonstrate semantic-oracle sensitivity in both
-slash insertion and removal directions. An explicit all-components-tilde mutant
-is rejected by the independent byte grammar; a spurious slash is distinguished
-by byte comparison while demonstrating Path equality's blind spot. No production
-mutation is left behind. After initial pass, added unrestricted byte tails up to
-2047 bytes, relative filesystem witnesses, and interior-dot/parent variants.
+slash insertion and removal directions. Initial oracle-only calibration was
+replaced at integration by an actual production mutation in a detached worktree:
+normalize the substituted suffix through Path::components(). Strict semantic
+mode rejected it, shrinking to "~/file/" (expected ENOTDIR, observed file).
+The mutation was restored; no deliberate production mutation is retained.
+After initial pass, added unrestricted byte tails up to 2047 bytes, relative
+filesystem witnesses, and interior-dot/parent variants.
 
 HOME mutation is isolated in a dedicated child test binary. Empty/unset HOME
 fallback is checked using an independent getpwuid_r provider query with ERANGE
@@ -95,3 +97,25 @@ PASS: saved minimized failure, 8192 fresh semantic cases, full 256-case matrix,
 
 env PATH_PROP_CHECK=raw PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261107 cargo test --test path_properties -- --nocapture
 PASS: saved lexical failures and 8192 fresh raw-byte grammar cases.
+
+Integration follow-up
+--------------------
+Production merge a427d7f combines both independent fixes. The integrated default
+mode now ASSERTS the filesystem matrix and generated semantic property rather
+than merely reporting discrepancies. The incidental Path-equality and
+oracle-only mutant assertions were removed in favor of real mutant execution.
+
+env PROPTEST_CASES=8192 PROPTEST_RNG_SEED=20261108 cargo test -- --nocapture
+PASS: 638990 path queries including 12560 exhaustive Cartesian queries;
+67233 HOME sets, 22226 empty transitions, 22423 unset transitions; zero byte
+discrepancies; 256 filesystem cases, zero semantic discrepancies; saved semantic
+failure plus 8192 fresh semantic cases pass. Existing and focused tests and
+all account properties also pass in the same run.
+
+env PATH_PROP_CHECK=raw PROPTEST_CASES=16384 PROPTEST_RNG_SEED=20261109 cargo test --test path_properties -- --nocapture
+PASS: persisted lexical failures and 16384 fresh raw-byte cases.
+
+Actual mutation command (detached worktree based on a427d7f):
+env PATH_PROP_CHECK=semantic PROPTEST_CASES=256 PROPTEST_RNG_SEED=20261108 cargo test --test path_properties -- --nocapture
+FAIL as intended: suffix normalization makes "~/file/" refer to a regular file
+instead of returning ENOTDIR. Source and mutation-generated seed were restored.
