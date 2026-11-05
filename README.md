@@ -10,6 +10,10 @@ A Rust library for expanding tilde expressions to user home directories.
 Uses `dirs-sys` 0.5 for current-user home directory lookup and `thiserror` 2
 for error implementations; the public expansion and error APIs are unchanged.
 
+Named users, including `root`, are resolved through the system account database.
+For example, `~root` uses `/var/root` on a standard macOS installation rather
+than assuming the Linux convention of `/root`.
+
 ## Usage
 
 ```rust

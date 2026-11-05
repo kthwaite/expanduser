@@ -78,12 +78,8 @@ where
                 },
                 Some(prefix) if prefix.starts_with("~") => {
                     let assumed_user = &prefix[1..];
-                    if assumed_user == "root" {
-                        path.push("/root");
-                    } else {
-                        let home_dir = unsafe { get_user_home(assumed_user)? };
-                        path.push(home_dir);
-                    }
+                    let home_dir = unsafe { get_user_home(assumed_user)? };
+                    path.push(home_dir);
                 }
                 _ => path.push(part),
             },
@@ -144,9 +140,32 @@ mod test {
     }
 
     #[test]
-    fn test_root_expansion() {
-        expand_user_eq!("~root", "/root");
-        expand_user_eq!("~root/.bashrc", "/root/.bashrc");
+    fn test_root_expansion_uses_account_database() {
+        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut buffer = vec![0u8; 1024];
+        let mut result = std::ptr::null_mut();
+        loop {
+            let status = unsafe {
+                libc::getpwnam_r(
+                    b"root\0".as_ptr().cast(),
+                    record.as_mut_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut result,
+                )
+            };
+            if status == libc::ERANGE {
+                buffer.resize(buffer.len() * 2, 0);
+                continue;
+            }
+            assert_eq!(status, 0);
+            assert!(!result.is_null(), "root account must exist for this test");
+            break;
+        }
+        let home = unsafe { CStr::from_ptr((*result).pw_dir) };
+        let expected = Path::new(OsStr::from_bytes(home.to_bytes()));
+        expand_user_eq!("~root", expected);
+        expand_user_eq!("~root/.bashrc", expected.join(".bashrc"));
     }
 
     #[test]
